@@ -110,18 +110,27 @@ def postprocess_qa_predictions(
 
 
 def train_baseline(cfg):
+    from datasets import load_dataset
     from transformers import AutoModelForQuestionAnswering, AutoTokenizer, Trainer, TrainingArguments
 
     set_seed(cfg.training.seed)
     raw_datasets = load_mlqa(cfg.data.dataset_name, cfg.data.languages, cfg.data.cache_dir)
+    
+    # MLQA doesn't have a train split - use SQuAD for training (standard approach)
     if cfg.data.train_split not in raw_datasets:
-        raise ValueError(f"Train split {cfg.data.train_split} not found in dataset")
+        print(f"Train split '{cfg.data.train_split}' not found in MLQA. Using SQuAD for training.")
+        squad = load_dataset("rajpurkar/squad", split="train")
+        # Add language field to match MLQA format
+        squad = squad.map(lambda x: {"language": "en"})
+        train_data = squad
+    else:
+        train_data = raw_datasets[cfg.data.train_split]
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.qa_model_name, use_fast=True)
-    train_dataset = raw_datasets[cfg.data.train_split].map(
+    train_dataset = train_data.map(
         lambda x: prepare_train_features(x, tokenizer, cfg.data.max_length, cfg.data.doc_stride),
         batched=True,
-        remove_columns=raw_datasets[cfg.data.train_split].column_names,
+        remove_columns=train_data.column_names,
     )
 
     eval_dataset = raw_datasets[cfg.data.eval_split].map(
