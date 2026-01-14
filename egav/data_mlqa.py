@@ -1,14 +1,152 @@
+import json
 import random
+import warnings
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+
+def _normalize_dataset_name(dataset_name: str) -> str:
+    """Normalize dataset identifiers.
+
+    Newer versions of `datasets` disallow loading *local* dataset scripts (e.g., mlqa.py).
+    Users sometimes download `mlqa.py` and pass it as dataset name; map that to the Hub
+    dataset id instead.
+    """
+
+    name = (dataset_name or "").strip()
+    if not name:
+        return "mlqa"
+
+    p = Path(name)
+    if p.suffix == ".py":
+        warnings.warn(
+            f"dataset_name={dataset_name!r} looks like a local dataset script. "
+            "Local dataset scripts are not supported by recent `datasets`; "
+            "falling back to the Hub dataset id 'mlqa'.",
+            RuntimeWarning,
+        )
+        return p.stem
+    return name
+
+
+def _load_squad_like_json(path: Path, language: Optional[str] = None):
+    """Load a SQuAD/MLQA-style JSON file into a HF Dataset."""
+    from datasets import Dataset
+
+    with path.open("r", encoding="utf-8") as f:
+        obj = json.load(f)
+    data = obj.get("data", obj)
+    rows = []
+    for article in data:
+        for para in article.get("paragraphs", []):
+            context = para.get("context", "")
+            for qa in para.get("qas", []):
+                answers = qa.get("answers", []) or []
+                rows.append(
+                    {
+                        "id": qa.get("id", ""),
+                        "question": qa.get("question", ""),
+                        "context": context,
+                        "answers": {
+                            "text": [a.get("text", "") for a in answers],
+                            "answer_start": [a.get("answer_start", -1) for a in answers],
+                        },
+                        "language": language or "",
+                    }
+                )
+    return Dataset.from_list(rows)
+
+
+def _try_load_local_mlqa(dataset_path: Path, lang: str):
+    """Attempt to load MLQA from local JSON files.
+
+    Supports:
+    - a directory containing split JSON files, optionally per-language
+    - a single JSON file (treated as a single split)
+    """
+    from datasets import DatasetDict
+
+    if dataset_path.is_file() and dataset_path.suffix.lower() == ".json":
+        return DatasetDict({"validation": _load_squad_like_json(dataset_path, language=lang)})
+
+    if not dataset_path.is_dir():
+        raise ValueError(f"Unsupported local dataset path: {dataset_path}")
+
+    # Try common layouts:
+    #   root/{lang}/{train,dev,test}.json
+    #   root/{train,dev,test}_{lang}.json
+    #   root/{train,dev,test}.json
+    candidates = []
+    lang_dir = dataset_path / lang
+    if lang_dir.is_dir():
+        candidates.append(lang_dir)
+    candidates.append(dataset_path)
+
+    split_map = {
+        "train": "train",
+        "training": "train",
+        "dev": "validation",
+        "valid": "validation",
+        "validation": "validation",
+        "val": "validation",
+        "test": "test",
+    }
+
+    dd = DatasetDict()
+    for base in candidates:
+        for file in base.glob("*.json"):
+            lower = file.stem.lower()
+            # e.g. dev_en, en_dev, etc.
+            parts = [p for p in lower.replace("-", "_").split("_") if p]
+            split_key = None
+            for p in parts:
+                if p in split_map:
+                    split_key = split_map[p]
+                    break
+            if split_key is None:
+                continue
+            if split_key in dd:
+                continue
+            dd[split_key] = _load_squad_like_json(file, language=lang)
+
+        if dd:
+            return dd
+    raise FileNotFoundError(
+        f"Could not find MLQA-style JSON splits under {dataset_path} (lang={lang})."
+    )
 
 
 def _try_load_mlqa(dataset_name: str, lang: str, cache_dir: Optional[str]):
     from datasets import load_dataset
 
+    name = _normalize_dataset_name(dataset_name)
+    p = Path(dataset_name)
+
+    # If the user passed a local path, try local JSON loading.
+    if p.exists():
+        if p.suffix == ".py":
+            raise ValueError(
+                f"Local dataset scripts like {dataset_name!r} are not supported by recent `datasets`. "
+                "Use dataset_name='mlqa' (Hugging Face Hub) or provide a local directory of JSON files."
+            )
+        return _try_load_local_mlqa(p, lang)
+
+    # Default: load from the Hub.
     try:
-        return load_dataset(dataset_name, lang, cache_dir=cache_dir)
-    except Exception:
-        return load_dataset(dataset_name, name=lang, cache_dir=cache_dir)
+        return load_dataset(name, lang, cache_dir=cache_dir)
+    except TypeError:
+        # Older/newer datasets sometimes require kwarg name.
+        return load_dataset(name, name=lang, cache_dir=cache_dir)
+    except RuntimeError as e:
+        # Surface actionable guidance for the specific Kaggle failure mode.
+        msg = str(e)
+        if "Dataset scripts are no longer supported" in msg and "mlqa.py" in msg:
+            raise RuntimeError(
+                "Your environment has a local 'mlqa.py' dataset script, but `datasets` no longer supports "
+                "loading local dataset scripts. Remove/rename mlqa.py and use dataset_name='mlqa', or "
+                "download MLQA as JSON and point dataset_name to that directory."
+            ) from e
+        raise
 
 
 def load_mlqa(dataset_name: str = "mlqa", languages: Optional[List[str]] = None, cache_dir: Optional[str] = None):
