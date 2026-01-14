@@ -1,6 +1,7 @@
 import argparse
 import inspect
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -159,6 +160,8 @@ def train_baseline(cfg):
         report_to=[],
         fp16=False,
         bf16=False,
+        disable_tqdm=True,  # Disable progress bars to reduce terminal spam
+        log_level="warning",  # Reduce logging verbosity
     )
     args_dict = _maybe_add_use_mps_device(args_dict)
     training_args = TrainingArguments(**args_dict)
@@ -212,11 +215,26 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--languages", type=str, default="en")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Custom output directory (e.g., /kaggle/tmp/runs)")
+    parser.add_argument("--disable-tqdm", action="store_true", default=True,
+                        help="Disable progress bars (default: True)")
     args = parser.parse_args()
+
+    # Set tqdm disable based on arg
+    if args.disable_tqdm:
+        os.environ["TQDM_DISABLE"] = "1"
+        import tqdm
+        tqdm.tqdm = lambda *args, **kwargs: iter(args[0]) if args else iter([])
 
     cfg = default_config()
     cfg.data.languages = args.languages.split(",")
     cfg.training.seed = args.seed
+    
+    # Override output directory if specified
+    if args.output_dir:
+        cfg.paths.baseline_dir = Path(args.output_dir) / "baseline"
+    
     metrics = train_baseline(cfg)
     print(json.dumps(metrics, indent=2))
 

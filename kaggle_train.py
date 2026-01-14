@@ -38,10 +38,17 @@ def setup_environment():
     print("STEP 1: Setting up environment")
     print("=" * 60)
     
-    # Check if running on Kaggle
+    # Check if running on Kaggle - use /kaggle/tmp for more space
+    # /kaggle/working has ~20GB, /kaggle/tmp has ~16GB additional
     is_kaggle = os.path.exists("/kaggle")
-    work_dir = "/kaggle/working" if is_kaggle else "."
+    if is_kaggle:
+        work_dir = "/kaggle/tmp"  # Use tmp for more space
+        os.makedirs(work_dir, exist_ok=True)
+    else:
+        work_dir = "."
     os.chdir(work_dir)
+    
+    print(f"Working directory: {work_dir}")
     
     # Clone repo if not exists
     if not os.path.exists(REPO_NAME):
@@ -79,14 +86,24 @@ def train_baseline(repo_path, seed, languages):
     
     os.chdir(repo_path)
     
+    # Determine output directory - use repo's runs folder (in /kaggle/tmp)
+    output_dir = os.path.join(repo_path, "runs")
+    
     # Run training
     cmd = [
         sys.executable, "-m", "egav.qa_baseline",
         "--languages", languages,
         "--seed", str(seed),
+        "--output-dir", output_dir,
     ]
     print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    
+    # Set environment to disable progress bars
+    env = os.environ.copy()
+    env["TQDM_DISABLE"] = "1"
+    env["HF_DATASETS_DISABLE_PROGRESS_BARS"] = "1"
+    
+    subprocess.run(cmd, check=True, env=env)
     
     print(f"Baseline training complete for seed={seed}!")
     return os.path.join(repo_path, "runs", "baseline", f"seed_{seed}")
@@ -161,7 +178,7 @@ def train_verifier(repo_path, candidates_path, seed, languages):
 # STEP 5: Push results to GitHub
 # =============================================================================
 def push_to_github(repo_path, seed):
-    """Push trained models and results to GitHub."""
+    """Push trained models and results to GitHub directly from /kaggle/tmp."""
     print("=" * 60)
     print(f"STEP 5: Pushing results to GitHub (seed={seed})")
     print("=" * 60)
@@ -169,14 +186,34 @@ def push_to_github(repo_path, seed):
     os.chdir(repo_path)
     
     # Try to get GitHub token from Kaggle secrets
+    # Supports both GITHUB_TOKEN and GITHUB_API as secret names
     try:
         from kaggle_secrets import UserSecretsClient
         secrets = UserSecretsClient()
-        github_token = secrets.get_secret("GITHUB_TOKEN")
-        github_username = secrets.get_secret("GITHUB_USERNAME") or GITHUB_USERNAME
+        # Try multiple possible secret names
+        github_token = None
+        for token_name in ["GITHUB_TOKEN", "GITHUB_API", "github_token", "github_api"]:
+            try:
+                github_token = secrets.get_secret(token_name)
+                if github_token:
+                    print(f"Using GitHub token from secret: {token_name}")
+                    break
+            except:
+                continue
+        
+        github_username = None
+        for user_name in ["GITHUB_USERNAME", "github_username"]:
+            try:
+                github_username = secrets.get_secret(user_name)
+                if github_username:
+                    break
+            except:
+                continue
+        github_username = github_username or GITHUB_USERNAME
+        
     except Exception as e:
         print(f"Could not get Kaggle secrets: {e}")
-        print("To push to GitHub, add GITHUB_TOKEN as a Kaggle secret.")
+        print("To push to GitHub, add GITHUB_TOKEN or GITHUB_API as a Kaggle secret.")
         print("Skipping GitHub push.")
         return False
     
@@ -287,17 +324,18 @@ def main():
     # Step 4: Train verifier (optional)
     verifier_path = train_verifier(repo_path, candidates_path, seed, languages)
     
-    # Step 5: Push results to GitHub
+    # Step 5: Push results to GitHub (directly from /kaggle/tmp)
     if not args.skip_push:
         push_to_github(repo_path, seed)
     
-    # Step 6: Save to Kaggle output
-    if os.path.exists("/kaggle"):
-        save_to_kaggle_output(repo_path, model_path, seed)
+    # Note: Skipping copy to /kaggle/working to save space
+    # Results are pushed directly to GitHub from /kaggle/tmp
+    # If you need to download models, use HuggingFace Hub instead
     
     print("=" * 60)
     print(f"TRAINING COMPLETE FOR SEED {seed}!")
-    print(f"Results saved to: runs/baseline/seed_{seed}/")
+    print(f"Results in: {repo_path}/runs/baseline/seed_{seed}/")
+    print("Results pushed to GitHub (if token provided)")
     print("=" * 60)
 
 
