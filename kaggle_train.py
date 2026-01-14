@@ -24,9 +24,9 @@ REPO_NAME = "GNNDistill"
 GITHUB_USERNAME = "hacky1997"
 
 # Training config
-LANGUAGES = "en"
+LANGUAGES = "en,de,es,ar,hi,vi,zh"  # All MLQA languages
 SEED = 42
-NUM_EPOCHS = 2  # Reduce for testing
+NUM_EPOCHS = 200  # Full training
 
 # =============================================================================
 # STEP 1: Setup environment
