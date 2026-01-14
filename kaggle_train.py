@@ -25,7 +25,7 @@ GITHUB_USERNAME = "hacky1997"
 
 # Training config
 LANGUAGES = "en,de,es,ar,hi,vi,zh"  # All MLQA languages
-SEED = 42
+SEEDS = [42, 123, 456]  # Multiple seeds for robust evaluation
 NUM_EPOCHS = 200  # Full training
 
 # =============================================================================
@@ -70,10 +70,10 @@ def setup_environment():
 # =============================================================================
 # STEP 2: Train baseline QA model
 # =============================================================================
-def train_baseline(repo_path):
+def train_baseline(repo_path, seed):
     """Train the baseline XLM-R QA model."""
     print("=" * 60)
-    print("STEP 2: Training baseline QA model")
+    print(f"STEP 2: Training baseline QA model (seed={seed})")
     print("=" * 60)
     
     os.chdir(repo_path)
@@ -82,27 +82,27 @@ def train_baseline(repo_path):
     cmd = [
         sys.executable, "-m", "egav.qa_baseline",
         "--languages", LANGUAGES,
-        "--seed", str(SEED),
+        "--seed", str(seed),
     ]
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
     
-    print("Baseline training complete!")
-    return os.path.join(repo_path, "runs", "baseline", f"seed_{SEED}")
+    print(f"Baseline training complete for seed={seed}!")
+    return os.path.join(repo_path, "runs", "baseline", f"seed_{seed}")
 
 
 # =============================================================================
 # STEP 3: Generate candidates (Top-K spans)
 # =============================================================================
-def generate_candidates(repo_path, model_path):
+def generate_candidates(repo_path, model_path, seed):
     """Generate top-K candidate spans for verification."""
     print("=" * 60)
-    print("STEP 3: Generating candidate spans")
+    print(f"STEP 3: Generating candidate spans (seed={seed})")
     print("=" * 60)
     
     os.chdir(repo_path)
     
-    output_path = os.path.join(repo_path, "runs", "baseline", "candidates_dev.jsonl")
+    output_path = os.path.join(repo_path, "runs", "baseline", f"seed_{seed}", "candidates_dev.jsonl")
     
     cmd = [
         sys.executable, "-m", "egav.candidates",
@@ -125,10 +125,10 @@ def generate_candidates(repo_path, model_path):
 # =============================================================================
 # STEP 4: Train verifier (MLP)
 # =============================================================================
-def train_verifier(repo_path, candidates_path):
+def train_verifier(repo_path, candidates_path, seed):
     """Train the MLP verifier."""
     print("=" * 60)
-    print("STEP 4: Training MLP verifier")
+    print(f"STEP 4: Training MLP verifier (seed={seed})")
     print("=" * 60)
     
     if candidates_path is None:
@@ -137,7 +137,7 @@ def train_verifier(repo_path, candidates_path):
     
     os.chdir(repo_path)
     
-    output_path = os.path.join(repo_path, "runs", "verifier", f"seed_{SEED}")
+    output_path = os.path.join(repo_path, "runs", "verifier", f"seed_{seed}")
     
     cmd = [
         sys.executable, "-m", "egav.train_verifier",
@@ -209,7 +209,7 @@ def push_to_github(repo_path):
         return True
     
     # Commit and push
-    subprocess.run(["git", "commit", "-m", f"Add training results (seed={SEED})"], check=True)
+    subprocess.run(["git", "commit", "-m", f"Add training results (seeds={SEEDS})"], check=True)
     subprocess.run(["git", "push"], check=True)
     
     print("Results pushed to GitHub!")
@@ -219,10 +219,10 @@ def push_to_github(repo_path):
 # =============================================================================
 # STEP 6: Save model to Kaggle output (for download)
 # =============================================================================
-def save_to_kaggle_output(repo_path, model_path):
+def save_to_kaggle_output(repo_path, model_path, seed):
     """Copy model files to Kaggle output directory for easy download."""
     print("=" * 60)
-    print("STEP 6: Saving model to Kaggle output")
+    print(f"STEP 6: Saving model to Kaggle output (seed={seed})")
     print("=" * 60)
     
     import shutil
@@ -232,7 +232,7 @@ def save_to_kaggle_output(repo_path, model_path):
     
     # Copy the trained model
     if model_path and os.path.exists(model_path):
-        dest = os.path.join(output_dir, "baseline_model")
+        dest = os.path.join(output_dir, f"baseline_model_seed_{seed}")
         if os.path.exists(dest):
             shutil.rmtree(dest)
         shutil.copytree(model_path, dest)
@@ -253,29 +253,42 @@ def save_to_kaggle_output(repo_path, model_path):
 def main():
     print("=" * 60)
     print("EGAV Training Pipeline")
+    print(f"Seeds: {SEEDS}")
+    print(f"Languages: {LANGUAGES}")
+    print(f"Epochs: {NUM_EPOCHS}")
     print("=" * 60)
     
     # Step 1: Setup
     repo_path = setup_environment()
     
-    # Step 2: Train baseline
-    model_path = train_baseline(repo_path)
+    # Train for each seed
+    model_paths = []
+    for seed in SEEDS:
+        print("\n" + "#" * 60)
+        print(f"### TRAINING WITH SEED {seed}")
+        print("#" * 60 + "\n")
+        
+        # Step 2: Train baseline
+        model_path = train_baseline(repo_path, seed)
+        model_paths.append(model_path)
+        
+        # Step 3: Generate candidates (optional, may not be fully implemented)
+        candidates_path = generate_candidates(repo_path, model_path, seed)
+        
+        # Step 4: Train verifier (optional)
+        verifier_path = train_verifier(repo_path, candidates_path, seed)
     
-    # Step 3: Generate candidates (optional, may not be fully implemented)
-    candidates_path = generate_candidates(repo_path, model_path)
-    
-    # Step 4: Train verifier (optional)
-    verifier_path = train_verifier(repo_path, candidates_path)
-    
-    # Step 5: Push to GitHub
+    # Step 5: Push all results to GitHub
     push_to_github(repo_path)
     
-    # Step 6: Save to Kaggle output
+    # Step 6: Save to Kaggle output (save all models)
     if os.path.exists("/kaggle"):
-        save_to_kaggle_output(repo_path, model_path)
+        for seed, model_path in zip(SEEDS, model_paths):
+            save_to_kaggle_output(repo_path, model_path, seed)
     
     print("=" * 60)
-    print("TRAINING COMPLETE!")
+    print("TRAINING COMPLETE FOR ALL SEEDS!")
+    print(f"Seeds trained: {SEEDS}")
     print("=" * 60)
 
 
