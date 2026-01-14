@@ -144,7 +144,7 @@ def train_baseline(cfg):
 
     args_dict = dict(
         output_dir=str(output_dir),
-        evaluation_strategy="steps",
+        eval_strategy="steps",  # renamed from evaluation_strategy in newer transformers
         eval_steps=cfg.training.eval_steps,
         save_steps=cfg.training.save_steps,
         logging_steps=cfg.training.logging_steps,
