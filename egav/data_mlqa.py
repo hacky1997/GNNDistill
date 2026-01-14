@@ -1,5 +1,8 @@
 import json
+import os
 import random
+import sys
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -24,13 +27,49 @@ def _mlqa_config_name(lang: str) -> str:
 def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]):
     """Load a dataset from the Hugging Face Hub.
 
-    Uses `trust_remote_code=True` to allow executing dataset scripts hosted on
-    the Hub. This is required for datasets like facebook/mlqa that have not yet
-    been converted to parquet format.
+    To avoid `datasets` accidentally resolving to a local `mlqa.py` file (which
+    newer versions refuse to execute), we temporarily:
+      1. Change CWD to a temp directory
+      2. Remove CWD and common problematic paths from sys.path
+      3. Rename any local mlqa.py temporarily (belt-and-suspenders)
+
+    This ensures `datasets` only looks at the Hub.
     """
     from datasets import load_dataset
 
-    return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+    old_cwd = os.getcwd()
+    old_sys_path = list(sys.path)
+
+    # Check for local mlqa.py in CWD and temporarily rename it
+    local_mlqa = Path(old_cwd) / "mlqa.py"
+    renamed_mlqa = None
+    if local_mlqa.exists():
+        renamed_mlqa = local_mlqa.with_suffix(".py.bak_egav")
+        try:
+            local_mlqa.rename(renamed_mlqa)
+        except Exception:
+            renamed_mlqa = None  # couldn't rename, proceed anyway
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="egav_hf_") as tmp:
+            os.chdir(tmp)
+            # Remove entries that might contain local scripts
+            sys.path = [
+                p for p in sys.path
+                if p not in {"", ".", old_cwd}
+                and not (p and Path(p).resolve() == Path(old_cwd).resolve())
+            ]
+
+            return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+    finally:
+        os.chdir(old_cwd)
+        sys.path = old_sys_path
+        # Restore the renamed file
+        if renamed_mlqa and renamed_mlqa.exists():
+            try:
+                renamed_mlqa.rename(local_mlqa)
+            except Exception:
+                pass
 
 
 def _normalize_dataset_name(dataset_name: str) -> str:
