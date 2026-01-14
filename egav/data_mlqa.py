@@ -5,6 +5,38 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+def _load_dataset_from_hub_safely(name: str, config_name: str, cache_dir: Optional[str]):
+    """Load a dataset from the Hugging Face Hub while avoiding local script name collisions.
+
+    In environments like Kaggle, a local file named e.g. `mlqa.py` can exist on the Python
+    path. `datasets` will try to resolve `load_dataset('mlqa')` to that local file first,
+    and newer `datasets` versions error out because local dataset scripts are unsupported.
+
+    Workaround: temporarily change CWD and remove it from `sys.path` during resolution.
+    """
+
+    import os
+    import sys
+    import tempfile
+
+    from datasets import load_dataset
+
+    old_cwd = os.getcwd()
+    old_sys_path = list(sys.path)
+    try:
+        with tempfile.TemporaryDirectory(prefix="egav_hf_") as tmp:
+            os.chdir(tmp)
+            # Remove CWD entries so `datasets` cannot find local dataset scripts.
+            sys.path = [p for p in sys.path if p not in {"", old_cwd, tmp}]
+            try:
+                return load_dataset(name, config_name, cache_dir=cache_dir)
+            except TypeError:
+                return load_dataset(name, name=config_name, cache_dir=cache_dir)
+    finally:
+        os.chdir(old_cwd)
+        sys.path = old_sys_path
+
+
 def _normalize_dataset_name(dataset_name: str) -> str:
     """Normalize dataset identifiers.
 
@@ -117,8 +149,6 @@ def _try_load_local_mlqa(dataset_path: Path, lang: str):
 
 
 def _try_load_mlqa(dataset_name: str, lang: str, cache_dir: Optional[str]):
-    from datasets import load_dataset
-
     name = _normalize_dataset_name(dataset_name)
     p = Path(dataset_name)
 
@@ -131,12 +161,9 @@ def _try_load_mlqa(dataset_name: str, lang: str, cache_dir: Optional[str]):
             )
         return _try_load_local_mlqa(p, lang)
 
-    # Default: load from the Hub.
+    # Default: load from the Hub (safely, to avoid local script collisions).
     try:
-        return load_dataset(name, lang, cache_dir=cache_dir)
-    except TypeError:
-        # Older/newer datasets sometimes require kwarg name.
-        return load_dataset(name, name=lang, cache_dir=cache_dir)
+        return _load_dataset_from_hub_safely(name, lang, cache_dir)
     except RuntimeError as e:
         # Surface actionable guidance for the specific Kaggle failure mode.
         msg = str(e)
