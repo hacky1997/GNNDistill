@@ -12,6 +12,7 @@ To push results back to GitHub, you need to set up GitHub credentials as Kaggle 
 - GITHUB_USERNAME: Your GitHub username (e.g., hacky1997)
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -70,7 +71,7 @@ def setup_environment():
 # =============================================================================
 # STEP 2: Train baseline QA model
 # =============================================================================
-def train_baseline(repo_path, seed):
+def train_baseline(repo_path, seed, languages):
     """Train the baseline XLM-R QA model."""
     print("=" * 60)
     print(f"STEP 2: Training baseline QA model (seed={seed})")
@@ -81,7 +82,7 @@ def train_baseline(repo_path, seed):
     # Run training
     cmd = [
         sys.executable, "-m", "egav.qa_baseline",
-        "--languages", LANGUAGES,
+        "--languages", languages,
         "--seed", str(seed),
     ]
     print(f"Running: {' '.join(cmd)}")
@@ -94,7 +95,7 @@ def train_baseline(repo_path, seed):
 # =============================================================================
 # STEP 3: Generate candidates (Top-K spans)
 # =============================================================================
-def generate_candidates(repo_path, model_path, seed):
+def generate_candidates(repo_path, model_path, seed, languages):
     """Generate top-K candidate spans for verification."""
     print("=" * 60)
     print(f"STEP 3: Generating candidate spans (seed={seed})")
@@ -109,7 +110,7 @@ def generate_candidates(repo_path, model_path, seed):
         "--model", model_path,
         "--output", output_path,
         "--split", "validation",
-        "--languages", LANGUAGES,
+        "--languages", languages,
     ]
     print(f"Running: {' '.join(cmd)}")
     
@@ -125,7 +126,7 @@ def generate_candidates(repo_path, model_path, seed):
 # =============================================================================
 # STEP 4: Train verifier (MLP)
 # =============================================================================
-def train_verifier(repo_path, candidates_path, seed):
+def train_verifier(repo_path, candidates_path, seed, languages):
     """Train the MLP verifier."""
     print("=" * 60)
     print(f"STEP 4: Training MLP verifier (seed={seed})")
@@ -143,7 +144,7 @@ def train_verifier(repo_path, candidates_path, seed):
         sys.executable, "-m", "egav.train_verifier",
         "--candidates", candidates_path,
         "--output", output_path,
-        "--lang", LANGUAGES,
+        "--lang", languages,
     ]
     print(f"Running: {' '.join(cmd)}")
     
@@ -159,10 +160,10 @@ def train_verifier(repo_path, candidates_path, seed):
 # =============================================================================
 # STEP 5: Push results to GitHub
 # =============================================================================
-def push_to_github(repo_path):
+def push_to_github(repo_path, seed):
     """Push trained models and results to GitHub."""
     print("=" * 60)
-    print("STEP 5: Pushing results to GitHub")
+    print(f"STEP 5: Pushing results to GitHub (seed={seed})")
     print("=" * 60)
     
     os.chdir(repo_path)
@@ -209,7 +210,7 @@ def push_to_github(repo_path):
         return True
     
     # Commit and push
-    subprocess.run(["git", "commit", "-m", f"Add training results (seeds={SEEDS})"], check=True)
+    subprocess.run(["git", "commit", "-m", f"Add training results (seed={seed})"], check=True)
     subprocess.run(["git", "push"], check=True)
     
     print("Results pushed to GitHub!")
@@ -251,44 +252,52 @@ def save_to_kaggle_output(repo_path, model_path, seed):
 # MAIN
 # =============================================================================
 def main():
+    parser = argparse.ArgumentParser(description="EGAV Training Pipeline")
+    parser.add_argument("--seed", type=int, default=42, choices=SEEDS,
+                        help=f"Random seed for training. Choose from {SEEDS}")
+    parser.add_argument("--languages", type=str, default=LANGUAGES,
+                        help="Comma-separated language codes (e.g., 'en,de,es')")
+    parser.add_argument("--skip-push", action="store_true",
+                        help="Skip pushing results to GitHub")
+    args = parser.parse_args()
+    
+    seed = args.seed
+    languages = args.languages
+    
     print("=" * 60)
     print("EGAV Training Pipeline")
-    print(f"Seeds: {SEEDS}")
-    print(f"Languages: {LANGUAGES}")
+    print(f"Seed: {seed}")
+    print(f"Languages: {languages}")
     print(f"Epochs: {NUM_EPOCHS}")
     print("=" * 60)
     
     # Step 1: Setup
     repo_path = setup_environment()
     
-    # Train for each seed
-    model_paths = []
-    for seed in SEEDS:
-        print("\n" + "#" * 60)
-        print(f"### TRAINING WITH SEED {seed}")
-        print("#" * 60 + "\n")
-        
-        # Step 2: Train baseline
-        model_path = train_baseline(repo_path, seed)
-        model_paths.append(model_path)
-        
-        # Step 3: Generate candidates (optional, may not be fully implemented)
-        candidates_path = generate_candidates(repo_path, model_path, seed)
-        
-        # Step 4: Train verifier (optional)
-        verifier_path = train_verifier(repo_path, candidates_path, seed)
+    # Step 2: Train baseline for this seed
+    print("\n" + "#" * 60)
+    print(f"### TRAINING WITH SEED {seed}")
+    print("#" * 60 + "\n")
     
-    # Step 5: Push all results to GitHub
-    push_to_github(repo_path)
+    model_path = train_baseline(repo_path, seed, languages)
     
-    # Step 6: Save to Kaggle output (save all models)
+    # Step 3: Generate candidates (optional)
+    candidates_path = generate_candidates(repo_path, model_path, seed, languages)
+    
+    # Step 4: Train verifier (optional)
+    verifier_path = train_verifier(repo_path, candidates_path, seed, languages)
+    
+    # Step 5: Push results to GitHub
+    if not args.skip_push:
+        push_to_github(repo_path, seed)
+    
+    # Step 6: Save to Kaggle output
     if os.path.exists("/kaggle"):
-        for seed, model_path in zip(SEEDS, model_paths):
-            save_to_kaggle_output(repo_path, model_path, seed)
+        save_to_kaggle_output(repo_path, model_path, seed)
     
     print("=" * 60)
-    print("TRAINING COMPLETE FOR ALL SEEDS!")
-    print(f"Seeds trained: {SEEDS}")
+    print(f"TRAINING COMPLETE FOR SEED {seed}!")
+    print(f"Results saved to: runs/baseline/seed_{seed}/")
     print("=" * 60)
 
 
