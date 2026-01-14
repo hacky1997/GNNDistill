@@ -4,8 +4,10 @@ import random
 import sys
 import tempfile
 import warnings
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.request import urlretrieve
 
 
 # ---------------------------------------------------------------------------
@@ -14,14 +16,90 @@ from typing import Dict, List, Optional, Tuple
 # The canonical MLQA dataset on Hugging Face is "facebook/mlqa".
 # Config names follow the pattern "mlqa.{context_lang}.{question_lang}".
 # Supported languages: ar, de, en, es, hi, vi, zh
+#
+# Because recent versions of `datasets` (>=4.x) dropped support for dataset
+# scripts entirely, we fall back to downloading the raw MLQA JSON files from
+# the official GitHub release and loading them directly.
 # ---------------------------------------------------------------------------
 _MLQA_HUB_NAME = "facebook/mlqa"
 _MLQA_LANGUAGES = {"ar", "de", "en", "es", "hi", "vi", "zh"}
+
+# Official MLQA download URLs (from GitHub release)
+_MLQA_DEV_URL = "https://dl.fbaipublicfiles.com/MLQA/MLQA_V1.zip"
 
 
 def _mlqa_config_name(lang: str) -> str:
     """Return the MLQA Hub config name for a language (context==question language)."""
     return f"mlqa.{lang}.{lang}"
+
+
+def _get_mlqa_cache_dir(cache_dir: Optional[str]) -> Path:
+    """Return the directory where MLQA data will be cached."""
+    if cache_dir:
+        return Path(cache_dir) / "mlqa_raw"
+    return Path.home() / ".cache" / "egav" / "mlqa_raw"
+
+
+def _download_mlqa_if_needed(cache_dir: Optional[str]) -> Path:
+    """Download and extract MLQA dataset if not already cached.
+    
+    Returns the path to the extracted MLQA_V1 directory.
+    """
+    mlqa_cache = _get_mlqa_cache_dir(cache_dir)
+    mlqa_cache.mkdir(parents=True, exist_ok=True)
+    
+    mlqa_dir = mlqa_cache / "MLQA_V1"
+    if mlqa_dir.exists() and (mlqa_dir / "dev").exists():
+        return mlqa_dir
+    
+    zip_path = mlqa_cache / "MLQA_V1.zip"
+    if not zip_path.exists():
+        print(f"Downloading MLQA dataset to {zip_path}...")
+        urlretrieve(_MLQA_DEV_URL, zip_path)
+        print("Download complete.")
+    
+    print(f"Extracting MLQA dataset to {mlqa_cache}...")
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(mlqa_cache)
+    print("Extraction complete.")
+    
+    return mlqa_dir
+
+
+def _load_mlqa_from_raw_json(lang: str, cache_dir: Optional[str]):
+    """Load MLQA from the official raw JSON files.
+    
+    MLQA structure after extraction:
+        MLQA_V1/
+            dev/dev-context-{lang}-question-{lang}.json
+            test/test-context-{lang}-question-{lang}.json
+    
+    Note: MLQA does NOT have an official train split. For training, users
+    typically use SQuAD or translate SQuAD to other languages.
+    """
+    from datasets import DatasetDict
+    
+    mlqa_dir = _download_mlqa_if_needed(cache_dir)
+    
+    dd = DatasetDict()
+    
+    # Dev split -> validation
+    dev_file = mlqa_dir / "dev" / f"dev-context-{lang}-question-{lang}.json"
+    if dev_file.exists():
+        dd["validation"] = _load_squad_like_json(dev_file, language=lang)
+    
+    # Test split
+    test_file = mlqa_dir / "test" / f"test-context-{lang}-question-{lang}.json"
+    if test_file.exists():
+        dd["test"] = _load_squad_like_json(test_file, language=lang)
+    
+    if not dd:
+        raise FileNotFoundError(
+            f"Could not find MLQA files for language '{lang}' in {mlqa_dir}. "
+            f"Expected files like dev-context-{lang}-question-{lang}.json"
+        )
+    
+    return dd
 
 
 def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]):
@@ -60,7 +138,20 @@ def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]
                 and not (p and Path(p).resolve() == Path(old_cwd).resolve())
             ]
 
-            return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+            # Try without trust_remote_code first (for newer datasets versions)
+            try:
+                return load_dataset(name, config_name, cache_dir=cache_dir)
+            except (TypeError, RuntimeError):
+                pass
+            
+            # Try with trust_remote_code=True (for older datasets versions)
+            try:
+                return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+            except (TypeError, RuntimeError):
+                pass
+            
+            # If both fail, raise to trigger fallback
+            raise RuntimeError("Hub loading failed")
     finally:
         os.chdir(old_cwd)
         sys.path = old_sys_path
@@ -203,11 +294,22 @@ def _try_load_mlqa(dataset_name: str, lang: str, cache_dir: Optional[str]):
                 f"Supported languages: {sorted(_MLQA_LANGUAGES)}"
             )
         config_name = _mlqa_config_name(lang)
+        
+        # Try Hub first, fall back to raw JSON download if Hub fails
+        # (required for datasets>=4.x which dropped dataset script support)
+        try:
+            return _load_dataset_from_hub(name, config_name, cache_dir)
+        except Exception as e:
+            warnings.warn(
+                f"Could not load MLQA from Hub ({e}). "
+                "Falling back to downloading raw JSON files from Facebook.",
+                RuntimeWarning,
+            )
+            return _load_mlqa_from_raw_json(lang, cache_dir)
     else:
         config_name = lang
-
-    # Load from the Hub (without executing dataset scripts).
-    return _load_dataset_from_hub(name, config_name, cache_dir)
+        # For non-MLQA datasets, just try the Hub
+        return _load_dataset_from_hub(name, config_name, cache_dir)
 
 
 def load_mlqa(dataset_name: str = "mlqa", languages: Optional[List[str]] = None, cache_dir: Optional[str] = None):
