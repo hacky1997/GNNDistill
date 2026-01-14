@@ -24,26 +24,13 @@ def _mlqa_config_name(lang: str) -> str:
 def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]):
     """Load a dataset from the Hugging Face Hub.
 
-    Uses `trust_remote_code=False` to avoid executing any dataset scripts, which
-    newer versions of `datasets` no longer support.
+    Uses `trust_remote_code=True` to allow executing dataset scripts hosted on
+    the Hub. This is required for datasets like facebook/mlqa that have not yet
+    been converted to parquet format.
     """
     from datasets import load_dataset
 
-    # Try parquet/arrow first (trust_remote_code=False).
-    try:
-        return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=False)
-    except Exception:
-        pass
-
-    # Fallback: some older datasets may require trust_remote_code=True, but we
-    # explicitly avoid that for MLQA because it ships a script that fails.
-    # Instead, raise an informative error.
-    raise RuntimeError(
-        f"Could not load dataset '{name}' config '{config_name}' from the Hub without "
-        "executing a dataset script. Either the dataset has not been converted to "
-        "parquet format, or your `datasets` version is incompatible. "
-        "Try: pip install --upgrade datasets"
-    )
+    return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
 
 
 def _normalize_dataset_name(dataset_name: str) -> str:
