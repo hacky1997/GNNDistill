@@ -160,8 +160,7 @@ def train_baseline(cfg):
         report_to=[],
         fp16=False,
         bf16=False,
-        disable_tqdm=True,  # Disable progress bars to reduce terminal spam
-        log_level="warning",  # Reduce logging verbosity
+        disable_tqdm=False,  # Show progress bars
     )
     args_dict = _maybe_add_use_mps_device(args_dict)
     training_args = TrainingArguments(**args_dict)
