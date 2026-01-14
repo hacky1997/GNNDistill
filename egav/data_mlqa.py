@@ -5,36 +5,45 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-def _load_dataset_from_hub_safely(name: str, config_name: str, cache_dir: Optional[str]):
-    """Load a dataset from the Hugging Face Hub while avoiding local script name collisions.
+# ---------------------------------------------------------------------------
+# Hub dataset identifiers for MLQA
+# ---------------------------------------------------------------------------
+# The canonical MLQA dataset on Hugging Face is "facebook/mlqa".
+# Config names follow the pattern "mlqa.{context_lang}.{question_lang}".
+# Supported languages: ar, de, en, es, hi, vi, zh
+# ---------------------------------------------------------------------------
+_MLQA_HUB_NAME = "facebook/mlqa"
+_MLQA_LANGUAGES = {"ar", "de", "en", "es", "hi", "vi", "zh"}
 
-    In environments like Kaggle, a local file named e.g. `mlqa.py` can exist on the Python
-    path. `datasets` will try to resolve `load_dataset('mlqa')` to that local file first,
-    and newer `datasets` versions error out because local dataset scripts are unsupported.
 
-    Workaround: temporarily change CWD and remove it from `sys.path` during resolution.
+def _mlqa_config_name(lang: str) -> str:
+    """Return the MLQA Hub config name for a language (context==question language)."""
+    return f"mlqa.{lang}.{lang}"
+
+
+def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]):
+    """Load a dataset from the Hugging Face Hub.
+
+    Uses `trust_remote_code=False` to avoid executing any dataset scripts, which
+    newer versions of `datasets` no longer support.
     """
-
-    import os
-    import sys
-    import tempfile
-
     from datasets import load_dataset
 
-    old_cwd = os.getcwd()
-    old_sys_path = list(sys.path)
+    # Try parquet/arrow first (trust_remote_code=False).
     try:
-        with tempfile.TemporaryDirectory(prefix="egav_hf_") as tmp:
-            os.chdir(tmp)
-            # Remove CWD entries so `datasets` cannot find local dataset scripts.
-            sys.path = [p for p in sys.path if p not in {"", old_cwd, tmp}]
-            try:
-                return load_dataset(name, config_name, cache_dir=cache_dir)
-            except TypeError:
-                return load_dataset(name, name=config_name, cache_dir=cache_dir)
-    finally:
-        os.chdir(old_cwd)
-        sys.path = old_sys_path
+        return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=False)
+    except Exception:
+        pass
+
+    # Fallback: some older datasets may require trust_remote_code=True, but we
+    # explicitly avoid that for MLQA because it ships a script that fails.
+    # Instead, raise an informative error.
+    raise RuntimeError(
+        f"Could not load dataset '{name}' config '{config_name}' from the Hub without "
+        "executing a dataset script. Either the dataset has not been converted to "
+        "parquet format, or your `datasets` version is incompatible. "
+        "Try: pip install --upgrade datasets"
+    )
 
 
 def _normalize_dataset_name(dataset_name: str) -> str:
@@ -153,27 +162,26 @@ def _try_load_mlqa(dataset_name: str, lang: str, cache_dir: Optional[str]):
     p = Path(dataset_name)
 
     # If the user passed a local path, try local JSON loading.
-    if p.exists():
-        if p.suffix == ".py":
-            raise ValueError(
-                f"Local dataset scripts like {dataset_name!r} are not supported by recent `datasets`. "
-                "Use dataset_name='mlqa' (Hugging Face Hub) or provide a local directory of JSON files."
-            )
+    if p.exists() and p.suffix != ".py":
         return _try_load_local_mlqa(p, lang)
 
-    # Default: load from the Hub (safely, to avoid local script collisions).
-    try:
-        return _load_dataset_from_hub_safely(name, lang, cache_dir)
-    except RuntimeError as e:
-        # Surface actionable guidance for the specific Kaggle failure mode.
-        msg = str(e)
-        if "Dataset scripts are no longer supported" in msg and "mlqa.py" in msg:
-            raise RuntimeError(
-                "Your environment has a local 'mlqa.py' dataset script, but `datasets` no longer supports "
-                "loading local dataset scripts. Remove/rename mlqa.py and use dataset_name='mlqa', or "
-                "download MLQA as JSON and point dataset_name to that directory."
-            ) from e
-        raise
+    # Map short names like "mlqa" to the canonical Hub path "facebook/mlqa".
+    if name.lower() in {"mlqa", "mlqa.py"}:
+        name = _MLQA_HUB_NAME
+
+    # For MLQA, config names are "mlqa.{context_lang}.{question_lang}".
+    if name == _MLQA_HUB_NAME:
+        if lang not in _MLQA_LANGUAGES:
+            raise ValueError(
+                f"Language '{lang}' is not supported by MLQA. "
+                f"Supported languages: {sorted(_MLQA_LANGUAGES)}"
+            )
+        config_name = _mlqa_config_name(lang)
+    else:
+        config_name = lang
+
+    # Load from the Hub (without executing dataset scripts).
+    return _load_dataset_from_hub(name, config_name, cache_dir)
 
 
 def load_mlqa(dataset_name: str = "mlqa", languages: Optional[List[str]] = None, cache_dir: Optional[str] = None):
