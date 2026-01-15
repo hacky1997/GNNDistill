@@ -146,7 +146,8 @@ def _load_dataset_from_hub(name: str, config_name: str, cache_dir: Optional[str]
             
             # Try with trust_remote_code=True (for older datasets versions)
             try:
-                return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+                # return load_dataset(name, config_name, cache_dir=cache_dir, trust_remote_code=True)
+                return load_dataset(name, config_name, cache_dir=cache_dir)
             except (TypeError, RuntimeError):
                 pass
             
