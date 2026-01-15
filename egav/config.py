@@ -36,7 +36,7 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     seed: int = 42
-    num_train_epochs: int = 2
+    num_train_epochs: int = 200
     learning_rate: float = 3e-5
     weight_decay: float = 0.01
     warmup_ratio: float = 0.06
