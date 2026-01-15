@@ -216,15 +216,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Custom output directory (e.g., /kaggle/tmp/runs)")
-    parser.add_argument("--disable-tqdm", action="store_true", default=True,
-                        help="Disable progress bars (default: True)")
+    parser.add_argument("--disable-tqdm", action="store_true", default=False,
+                        help="Disable progress bars (default: False, shows progress)")
     args = parser.parse_args()
 
-    # Set tqdm disable based on arg
+    # Set tqdm disable based on arg (only if explicitly requested)
     if args.disable_tqdm:
         os.environ["TQDM_DISABLE"] = "1"
-        import tqdm
-        tqdm.tqdm = lambda *args, **kwargs: iter(args[0]) if args else iter([])
 
     cfg = default_config()
     cfg.data.languages = args.languages.split(",")
