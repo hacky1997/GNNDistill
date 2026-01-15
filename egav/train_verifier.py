@@ -1,3 +1,4 @@
+
 import argparse
 import json
 import random
@@ -14,6 +15,10 @@ from egav.graph_features import compute_features_for_candidates, feature_names
 from egav.ner import extract_mentions
 from egav.gnn_verifier import MLPVerifier
 from egav.utils import ensure_dir, f1_score, read_jsonl, set_seed, get_device
+
+# Suppress tqdm globally for this script
+import os
+os.environ["TQDM_DISABLE"] = "1"
 
 
 class FeatureScaler:
