@@ -61,7 +61,7 @@ def run_inference(
         )
         feats = scaler.transform(np.array(feats, dtype=np.float32))
         with torch.no_grad():
-            scores = model(torch.tensor(feats).to(device)).cpu().numpy()
+            scores = model(torch.tensor(feats, dtype=torch.float32).to(device)).cpu().numpy()
         scores = np.clip(scores, 0.0, 1.0)
 
         for cand, s in zip(row["candidates"], scores):
