@@ -157,6 +157,7 @@ def train_baseline(cfg):
         warmup_ratio=cfg.training.warmup_ratio,
         gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
         max_grad_norm=cfg.training.max_grad_norm,
+        optim="adamw_torch", # ← ADD THIS LINE (fix fused optimizer error)
         report_to=[],
         fp16=False,
         bf16=False,
