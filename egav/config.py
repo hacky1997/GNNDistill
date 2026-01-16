@@ -36,18 +36,18 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     seed: int = 42
-    num_train_epochs: int = 4
-    learning_rate: float = 3e-5
-    weight_decay: float = 0.01
-    warmup_ratio: float = 0.06
-    per_device_train_batch_size: int = 8
+    num_train_epochs: int = 25
+    learning_rate: float = 5e-5
+    weight_decay: float = 0.001
+    warmup_ratio: float = 0.03
+    per_device_train_batch_size: int = 16
     per_device_eval_batch_size: int = 8
     gradient_accumulation_steps: int = 1
-    eval_steps: int = 500
-    save_steps: int = 500
-    logging_steps: int = 50
+    eval_steps: int = 5000
+    save_steps: int = 5000
+    save_total_limit: int = 5
+    logging_steps: int = 100
     max_grad_norm: float = 1.0
-
 
 @dataclass
 class VerifierConfig:
