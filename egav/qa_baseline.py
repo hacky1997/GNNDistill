@@ -113,8 +113,34 @@ def postprocess_qa_predictions(
 def train_baseline(cfg):
     from datasets import load_dataset
     from transformers import AutoModelForQuestionAnswering, AutoTokenizer, Trainer, TrainingArguments
+    from egav.hf_checkpoint_callback import HFCheckpointCallback
+    from egav.hf_checkpoint_utils import download_latest_checkpoint
 
     set_seed(cfg.training.seed)
+
+    # === HF CONFIGURATION ===
+    HF_REPO_ID = "hacky1997/qa-baseline-seed-42"  # Change this!
+    HF_TOKEN = os.environ.get("HF_TOKEN")  # Set in Kaggle secrets
+    
+    output_dir = cfg.paths.baseline_dir / f"seed_{cfg.training.seed}"
+    ensure_dir(output_dir)
+    
+    # === ATTEMPT TO RESUME FROM HF ===
+    resume_checkpoint = None
+    if HF_TOKEN:
+        print("\n🔍 Checking for existing checkpoints on HF Hub...")
+        resume_checkpoint = download_latest_checkpoint(
+            repo_id=HF_REPO_ID,
+            local_dir=str(output_dir),
+            token=HF_TOKEN
+        )
+        
+        if resume_checkpoint:
+            print(f"✅ Will resume from: {resume_checkpoint}")
+        else:
+            print("ℹ️ No checkpoint found. Starting fresh training.")
+    
+    # === LOAD DATA ===
     raw_datasets = load_mlqa(cfg.data.dataset_name, cfg.data.languages, cfg.data.cache_dir)
     
     # MLQA doesn't have a train split - use SQuAD for training (standard approach)
@@ -148,6 +174,7 @@ def train_baseline(cfg):
         eval_strategy="steps",  # renamed from evaluation_strategy in newer transformers
         eval_steps=cfg.training.eval_steps,
         save_steps=cfg.training.save_steps,
+        save_total_limit=3,  # ← ADDED
         logging_steps=cfg.training.logging_steps,
         per_device_train_batch_size=cfg.training.per_device_train_batch_size,
         per_device_eval_batch_size=cfg.training.per_device_eval_batch_size,
@@ -161,20 +188,67 @@ def train_baseline(cfg):
         fp16=False,
         bf16=False,
         disable_tqdm=False,  # Show progress bars
+        load_best_model_at_end=False,  # We'll handle this manually
     )
     args_dict = _maybe_add_use_mps_device(args_dict)
     training_args = TrainingArguments(**args_dict)
 
-    model = AutoModelForQuestionAnswering.from_pretrained(cfg.model.qa_model_name)
+    # model = AutoModelForQuestionAnswering.from_pretrained(cfg.model.qa_model_name)
+    # Load model (resume from checkpoint if available)
+    if resume_checkpoint:
+        print(f"\n📂 Loading model from checkpoint: {resume_checkpoint}")
+        model = AutoModelForQuestionAnswering.from_pretrained(resume_checkpoint)
+    else:
+        print(f"\n📂 Loading fresh model: {cfg.model.qa_model_name}")
+        model = AutoModelForQuestionAnswering.from_pretrained(cfg.model.qa_model_name)
+        
+        # trainer = Trainer(
+        #     model=model,
+        #     args=training_args,
+        #     train_dataset=train_dataset,
+        #     eval_dataset=eval_dataset,
+        #     tokenizer=tokenizer,
+        # )
+        # trainer.train()
+    
+    # Create callbacks list
+    callbacks = []
+
+    if HF_TOKEN:
+        hf_callback = HFCheckpointCallback(
+            repo_id=HF_REPO_ID,
+            token=HF_TOKEN,
+            upload_every_n_steps=cfg.training.save_steps
+        )
+        callbacks.append(hf_callback)
+        print(f"✅ Auto-upload enabled to: {HF_REPO_ID}")
+    else:
+        print("⚠️ HF_TOKEN not set. Checkpoints won't be uploaded.")
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
+        callbacks=callbacks,  # ← ADD THIS
     )
-    trainer.train()
 
+    print("\n🚀 Starting training...")
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
+
+    # Save and upload final model
+    trainer.save_model(str(output_dir / "final_model"))
+
+    if HF_TOKEN:
+        print("\n📤 Uploading final model to HF Hub...")
+        try:
+            model.push_to_hub(HF_REPO_ID, token=HF_TOKEN, commit_message="Final model")
+            tokenizer.push_to_hub(HF_REPO_ID, token=HF_TOKEN)
+            print(f"✅ Final model at: https://huggingface.co/{HF_REPO_ID}")
+        except Exception as e:
+            print(f"⚠️ Final upload failed: {e}")
+            
     predictions = trainer.predict(eval_dataset)
     preds, nbest = postprocess_qa_predictions(
         raw_datasets[cfg.data.eval_split],

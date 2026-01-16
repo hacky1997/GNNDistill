@@ -44,7 +44,7 @@ class TrainingConfig:
     per_device_eval_batch_size: int = 8
     gradient_accumulation_steps: int = 1
     eval_steps: int = 5000
-    save_steps: int = 5000
+    save_steps: int = 2500
     save_total_limit: int = 5
     logging_steps: int = 100
     max_grad_norm: float = 1.0
