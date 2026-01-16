@@ -28,7 +28,7 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    qa_model_name: str = "xlm-roberta-base"
+    qa_model_name: str = "deepset/xlm-roberta-base-squad2"  # Fixed typo + added namespace
     ner_model_name: str = "Davlan/xlm-roberta-base-ner-hrl"
     gnn_hidden_dim: int = 128
 
